@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<VariablesViewState
+   version = "1.0">
+   <ContextStates>
+      <ContextState
+         contextName = "__30-[NNGoPush getOfflineMessage:]_block_invoke:NNGoPush.m">
+         <PersistentStrings>
+            <PersistentString
+               value = "[mDic objectForKey:@&quot;mid&quot;]">
+            </PersistentString>
+         </PersistentStrings>
+      </ContextState>
+      <ContextState
+         contextName = "-[NNGoPush initSocket:]:NNGoPush.m">
+         <PersistentStrings>
+            <PersistentString
+               value = "error">
+            </PersistentString>
+         </PersistentStrings>
+      </ContextState>
+   </ContextStates>
+</VariablesViewState>
