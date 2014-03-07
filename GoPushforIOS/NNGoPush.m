@@ -49,8 +49,6 @@
 
 @implementation NNGoPush
 
-
-
 - (id)initWithHost:(NSString *)host port:(int)port key:(NSString *)key expire:(long)expire delegate:(id)delegate{
     self.host = host;
     self.port = port;
@@ -113,7 +111,7 @@
     [self start];
 }
 
-- (void)destory{
+- (void)dealloc{
     if (_isDesotry) {
         return;
     }
@@ -129,6 +127,9 @@
     if (_heartBeatTask&&[_heartBeatTask isValid]) {
         [_heartBeatTask invalidate];
     }
+    [_host release];
+    [_key release];
+    [super dealloc];
 }
 
 - (NSArray *)getNodeHostAndPort:(NSString *)domain{
@@ -395,6 +396,11 @@
 
 
 @implementation NNPushMessage
+
+- (void)dealloc{
+    [_msg release];
+    [super dealloc];
+}
 
 - (id)initWithMsg:(NSString *)msg Mid:(long)mid Gid:(int)gid{
     self.msg = msg;
