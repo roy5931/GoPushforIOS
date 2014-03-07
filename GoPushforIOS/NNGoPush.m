@@ -69,49 +69,48 @@
 - (void)start{
     NSString *string = [NSString stringWithFormat:@"http://%@:%d/server/get?key=%@&expire=%ld&proto=2",_host,_port,_key,_expire];
     NSURLRequest *request = [NSURLRequest requestWithURL:[NSURL URLWithString:string]];
-    AFHTTPRequestOperation *operation = [[AFHTTPRequestOperation alloc] initWithRequest:request];
+    AFHTTPRequestOperation *operation = [[[AFHTTPRequestOperation alloc] initWithRequest:request]autorelease];
     [operation setCompletionBlockWithSuccess:^(AFHTTPRequestOperation *operation, id responseObject) {
         NSLog(@"Success: %@", operation.responseString);
         NSString *JSON = operation.responseString;
         
         // 初始化socket
         [self initSocket:[self getNodeHostAndPort:JSON]];
-        
-        
-        // 协议已经握手，打开
-        if (_goPushDelegate) {
-            [_goPushDelegate onOpen];
-        }
-        // 如果有离线消息
-        [self getOfflineMessage:^(NSArray *messages) {
-            if (messages != NULL) {
-                if (_goPushDelegate) {
-                    [_goPushDelegate onOfflineMessages:messages];
-                }
-            }
-        }];
-        
-        
-        // 准备定时心跳任务
-        _heartBeatTask = [NSTimer scheduledTimerWithTimeInterval:_expire target:self selector:@selector(heartBeat) userInfo:nil repeats:YES];
-        
-        [self readline];
-        
+
     } failure:^(AFHTTPRequestOperation *operation, NSError *error) {
-        NSLog(@"Failure: %@", error);
+        if (_goPushDelegate) {
+            [_goPushDelegate onError:error WithMessage:@"getServerInfoFailed"];
+        }
+        //获取host和port失败 重试
+        [self reConnect];
+        NSLog(@"getServerInfoFailed: %@", error);
     }];
     [operation start];
 }
 
 - (void)initSocket:(NSArray *)node{
-    //    try {
     dispatch_queue_t mainQueue = dispatch_get_main_queue();
-    _asyncSocket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:mainQueue];
+    if (!_asyncSocket) {
+        _asyncSocket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:mainQueue];
+    }
     NSError *error = NULL;
     [_asyncSocket connectToHost:node[0] onPort:((NSNumber *)node[1]).intValue withTimeout:_expire*2 error:&error];
     
     // 发送请求协议头
     [self sendHeader];
+}
+
+//重连
+- (void)reConnect{
+    //断开连接
+    [_asyncSocket setDelegate:nil];
+    [_asyncSocket disconnect];
+    if (_heartBeatTask&&[_heartBeatTask isValid]) {
+        [_heartBeatTask invalidate];
+    }
+    
+    [_asyncSocket setDelegate:self];
+    [self start];
 }
 
 - (void)destory{
@@ -125,6 +124,7 @@
     if (_asyncSocket&&[_asyncSocket isConnected]&&_asyncSocket) {
         [_asyncSocket disconnectAfterReadingAndWriting];
         [_asyncSocket release];
+        _asyncSocket = nil;
     }
     if (_heartBeatTask&&[_heartBeatTask isValid]) {
         [_heartBeatTask invalidate];
@@ -134,10 +134,8 @@
 - (NSArray *)getNodeHostAndPort:(NSString *)domain{
     //    @try {
     NSDictionary *dic = [domain objectFromJSONString];
-    //        JSONObject data = new JSONObject(HttpUtils.get(domain));
     // 判断协议
     int ret = ((NSNumber *)dic[KS_NET_JSON_KEY_RET]).intValue;
-    //        int ret = data.getInt(Constant.KS_NET_JSON_KEY_RET);
     if (ret == KS_NET_STATE_OK) {
         NSDictionary *jot = dic[KS_NET_JSON_KEY_DATA];
         NSString *server = jot[KS_NET_JSON_KEY_SERVER];
@@ -159,13 +157,13 @@
 
 - (void)send:(NSString *)message tag:(long)tag{
     NSAssert(_asyncSocket!=NULL, @"asyncSocket could not be NULL!");
-    [_asyncSocket writeData:[message dataUsingEncoding:NSUTF8StringEncoding] withTimeout:-1 tag:tag];
+    [_asyncSocket writeData:[message dataUsingEncoding:NSUTF8StringEncoding] withTimeout:_expire tag:tag];
 }
 
 - (void)readline{
     NSAssert(_asyncSocket!=NULL, @"asyncSocket could not be NULL!");
     NSData *term = [@"\r\n" dataUsingEncoding:NSUTF8StringEncoding];
-    [_asyncSocket readDataToData:term withTimeout:-1 tag:TAG_DEFAULT];
+    [_asyncSocket readDataToData:term withTimeout:_expire tag:TAG_DEFAULT];
 }
 
 - (void)handleLine:(NSString *)line{
@@ -262,6 +260,9 @@
             }
         }
     } failure:^(AFHTTPRequestOperation *operation, NSError *error) {
+        if (_goPushDelegate) {
+            [_goPushDelegate onError:error WithMessage:@"getOfflineMessageFailed"];
+        }
         NSLog(@"Failure: %@", error);
     }];
     [operation start];
@@ -305,82 +306,25 @@
 {
 	NSLog(@"socket:%p didConnectToHost:%@ port:%hu", sock, host, port);
     //	self.viewController.label.text = @"Connected";
-	
-    //	NSLog(@"localHost :%@ port:%hu", [sock localHost], [sock localPort]);
-	
-#if USE_SECURE_CONNECTION
-	{
-		// Connected to secure server (HTTPS)
-        
-#if ENABLE_BACKGROUNDING && !TARGET_IPHONE_SIMULATOR
-		{
-			// Backgrounding doesn't seem to be supported on the simulator yet
-			
-			[sock performBlock:^{
-				if ([sock enableBackgroundingOnSocket])
-                NSLog(@"Enabled backgrounding on socket");
-				else
-                DDLogWarn(@"Enabling backgrounding failed!");
-			}];
-		}
-#endif
-		
-		// Configure SSL/TLS settings
-		NSMutableDictionary *settings = [NSMutableDictionary dictionaryWithCapacity:3];
-		
-		// If you simply want to ensure that the remote host's certificate is valid,
-		// then you can use an empty dictionary.
-		
-		// If you know the name of the remote host, then you should specify the name here.
-		//
-		// NOTE:
-		// You should understand the security implications if you do not specify the peer name.
-		// Please see the documentation for the startTLS method in GCDAsyncSocket.h for a full discussion.
-		
-		[settings setObject:@"www.paypal.com"
-					 forKey:(NSString *)kCFStreamSSLPeerName];
-		
-		// To connect to a test server, with a self-signed certificate, use settings similar to this:
-		
-        //	// Allow expired certificates
-        //	[settings setObject:[NSNumber numberWithBool:YES]
-        //				 forKey:(NSString *)kCFStreamSSLAllowsExpiredCertificates];
-        //
-        //	// Allow self-signed certificates
-        //	[settings setObject:[NSNumber numberWithBool:YES]
-        //				 forKey:(NSString *)kCFStreamSSLAllowsAnyRoot];
-        //
-        //	// In fact, don't even validate the certificate chain
-        //	[settings setObject:[NSNumber numberWithBool:NO]
-        //				 forKey:(NSString *)kCFStreamSSLValidatesCertificateChain];
-		
-		NSLog(@"Starting TLS with settings:\n%@", settings);
-		
-		[sock startTLS:settings];
-		
-		// You can also pass nil to the startTLS method, which is the same as passing an empty dictionary.
-		// Again, you should understand the security implications of doing so.
-		// Please see the documentation for the startTLS method in GCDAsyncSocket.h for a full discussion.
-		
-	}
-#else
-	{
-		// Connected to normal server (HTTP)
-		
-#if ENABLE_BACKGROUNDING && !TARGET_IPHONE_SIMULATOR
-		{
-			// Backgrounding doesn't seem to be supported on the simulator yet
-			
-			[sock performBlock:^{
-				if ([sock enableBackgroundingOnSocket])
-                NSLog(@"Enabled backgrounding on socket");
-				else
-                DDLogWarn(@"Enabling backgrounding failed!");
-			}];
-		}
-#endif
-	}
-#endif
+    
+    // 协议已经握手，打开
+    if (_goPushDelegate) {
+        [_goPushDelegate onOpen];
+    }
+    
+    // 如果有离线消息
+    [self getOfflineMessage:^(NSArray *messages) {
+        if (messages != NULL) {
+            if (_goPushDelegate) {
+                [_goPushDelegate onOfflineMessages:messages];
+            }
+        }
+    }];
+    
+    // 准备定时心跳任务
+    _heartBeatTask = [NSTimer scheduledTimerWithTimeInterval:_expire target:self selector:@selector(heartBeat) userInfo:nil repeats:YES];
+    
+    [self readline];
 }
 
 - (void)socketDidSecure:(GCDAsyncSocket *)sock
@@ -417,6 +361,34 @@
 {
 	NSLog(@"socketDidDisconnect:%p withError: %@", sock, err);
     //	self.viewController.label.text = @"Disconnected";
+    
+    //连接失败 尝试重连
+    [self reConnect];
+}
+
+- (NSTimeInterval)socket:(GCDAsyncSocket *)sock shouldTimeoutReadWithTag:(long)tag
+                 elapsed:(NSTimeInterval)elapsed
+               bytesDone:(NSUInteger)length{
+    NSLog(@"ReadDataTimeOut");
+    if (_goPushDelegate) {
+        [_goPushDelegate onError:nil WithMessage:@"ReadDataTimeOut"];
+    }
+    //超时重连
+    [self reConnect];
+    return 0;
+    
+}
+
+- (NSTimeInterval)socket:(GCDAsyncSocket *)sock shouldTimeoutWriteWithTag:(long)tag
+                 elapsed:(NSTimeInterval)elapsed
+               bytesDone:(NSUInteger)length{
+    NSLog(@"WriteDataTimeOut");
+    if (_goPushDelegate) {
+        [_goPushDelegate onError:nil WithMessage:@"WriteDataTimeOut"];
+    }
+    //超时重连
+    [self reConnect];
+    return 0;
 }
 
 @end

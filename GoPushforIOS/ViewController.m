@@ -56,4 +56,8 @@
     }
 }
 
+-(void)onError:(NSError *)e WithMessage:(NSString *)message{
+    [_textlabel setText:[@"onError:" stringByAppendingString:message]];
+}
+
 @end
